@@ -1,0 +1,100 @@
+#include <Arduino.h>
+#include "RadiationWatch.h"
+#include <HardwareSerial.h>
+#include <TinyGPS++.h>
+#include <DHT.h>
+#include <CanSatNeXT.h>
+
+// GPS beállítások
+#define RXPin 16  
+#define TXPin 17  
+#define GPSBaud 9600  
+
+#define MQ_PIN 33  // MQ szenzor analóg kimenet a GPIO33
+
+float sensor_voltage;  // Szenzor feszültség
+float RS_air;          // Ellenállás levegőben
+float R0 = 10.0;       // Alap kalibrációs ellenállás 
+
+HardwareSerial gpsSerial(1); 
+TinyGPSPlus gps;
+float latitude, longitude;
+
+// Hőmérséklet szenzor beállítás
+#define DHTTYPE DHT11  
+#define DHTPIN 15
+DHT dht(DHTPIN, DHTTYPE);
+bool measureEnabled = true;
+
+RadiationWatch radiationWatch (25,26);
+
+void onRadiation()
+{
+  Serial.println("A wild gamma ray appeared");
+  Serial.print(radiationWatch.uSvh());
+  Serial.print(" uSv/h +/- ");
+  Serial.println(radiationWatch.uSvhError());
+}
+
+void onNoise()
+{
+  Serial.println("Argh, noise, please stop moving");
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("ESP32 GPS és szenzor inicializálás...");
+
+  // GPS inicializálás
+  gpsSerial.begin(GPSBaud, SERIAL_8N1, RXPin, TXPin);
+  Serial.println("GPS indítása...");
+
+  // DHT11 inicializálás
+  Serial.println("DHT11 szenzor indítása...");
+  dht.begin();
+
+  // CanSat inicializálás
+  CanSatInit();
+  CanSatInit(72);
+  setRadioChannel(1); // 2.412 GHz
+
+radiationWatch.setup();
+  // Register the callbacks.
+  radiationWatch.registerRadiationCallback(&onRadiation);
+  radiationWatch.registerNoiseCallback(&onNoise);
+}
+void loop() {
+  // Soros parancs figyelése (START / STOP)
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim(); 
+
+    if (command == "STOP") {
+      measureEnabled = false;
+      Serial.println("Mérés leállítva.");
+    } else if (command == "START") {
+      measureEnabled = true;
+      Serial.println("Mérés elindítva.");
+    }
+  }
+  // GPS adat olvasás
+  while (gpsSerial.available()) {
+    char c = gpsSerial.read();
+    Serial.write(c);  
+
+    if (gps.encode(c)) {  
+      Serial.print("Látható műholdak: ");
+      Serial.println(gps.satellites.value());
+
+      if (gps.location.isValid()) {
+        latitude = gps.location.lat();
+        longitude = gps.location.lng();
+
+        Serial.print("Szélesség: ");
+        Serial.println(latitude, 6);
+        Serial.print("Hosszúság: ");
+        Serial.println(longitude, 6);
+      } else {
+        Serial.println("Nincs érvényes GPS-adat. Várakozás...");
+      }
+    }
